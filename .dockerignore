@@ -1,0 +1,9 @@
+.venv
+.git
+.claude
+__pycache__
+*.pyc
+bench*.sqlite*
+tests
+scripts
+README.md

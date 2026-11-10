@@ -1,0 +1,23 @@
+# Render blueprint: one Docker web service on the free plan.
+#
+# Free plan limits: the service sleeps after about 15 minutes idle, and there is no
+# persistent disk, so bench.sqlite (saved runs and feedback) is wiped on every restart
+# or redeploy. Export the CSV before you finish a session.
+#
+# To keep runs: change `plan: free` to `plan: starter` and uncomment the disk block.
+services:
+  - type: web
+    name: peapod-bench
+    runtime: docker
+    plan: free
+    region: singapore
+    healthCheckPath: /healthz
+    envVars:
+      - key: BENCH_PASSWORD  # the shared team password; set it in the Render dashboard
+        sync: false
+      - key: BENCH_DB
+        value: /data/bench.sqlite
+    # disk:
+    #   name: bench-data
+    #   mountPath: /data
+    #   sizeGB: 1
