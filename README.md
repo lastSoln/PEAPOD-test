@@ -133,7 +133,41 @@ that finishes.
 | `BENCH_PASSWORD` | none | The shared password. The app will not start without it. |
 | `BENCH_NO_AUTH` | unset | `1` turns the password off. Local use only. |
 | `PEAPOD_PLACES_DB` | `data/places.sqlite` | The places file. Opened with `file:...?mode=ro`. |
+| `PEAPOD_PLACES_URL` | unset | Postgres (Supabase) connection string. When set, places are read from there instead of the file. |
+| `PEAPOD_PLACES_TABLE` | `public.places` | The table to read when `PEAPOD_PLACES_URL` is set. |
 | `BENCH_DB` | `bench.sqlite` | Saved runs and feedback. The only file the app writes. |
+
+## Reading places from Supabase
+
+Set `PEAPOD_PLACES_URL` and the bench reads `public.places` from Supabase once at startup, in a
+read-only session, instead of the bundled file. The top bar and `/healthz` say which source is in
+use. If Supabase cannot be read, the bench starts on the bundled file and says "Supabase failed"
+(hover the top bar for the reason).
+
+The table needs the same column names as the SQLite `places` table: `place_id, name, address,
+latitude, longitude, zone, hub, chips, price_min, price_max, hours, visit_minutes, indoor_outdoor,
+website, phone, basis, status`. `chips`, `hours` and `basis` may be `text` or `jsonb`.
+
+Give the bench its own read-only role, so the database itself enforces "never write to the dataset".
+Run this once in the Supabase SQL editor, with a password of your own:
+
+```sql
+create role bench_reader login password 'choose-a-long-password';
+grant usage on schema public to bench_reader;
+grant select on public.places to bench_reader;
+```
+
+Then take the **Session pooler** connection string from Supabase's Connect panel (Render's free
+tier cannot reach the direct IPv6 address) and replace the user and password. A pooler user name
+has the project ref after a dot:
+
+```
+postgresql://bench_reader.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres
+```
+
+Put that in `PEAPOD_PLACES_URL` in Render's Environment tab. To try it locally first, put the same
+line in a `.env` file in this folder (`PEAPOD_PLACES_URL=postgresql://...`); `scripts/dev.py` reads
+it and Git ignores it.
 
 ## Deploy (one container)
 

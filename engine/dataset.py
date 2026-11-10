@@ -1,11 +1,12 @@
 """Read-only access to the Peapod places dataset.
 
-The SQLite file is opened in URI mode with mode=ro and immutable semantics are
-never needed: nothing here writes. Only the `places` table is read, and only
-rows with status='active'.
+Two sources, same result: a SQLite file opened in URI mode with mode=ro, or a
+Postgres table (Supabase) read in a read-only session. Nothing here writes. Only
+the `places` table is read, and only rows with status='active'.
 """
 
 import json
+import re
 import sqlite3
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -94,46 +95,43 @@ def is_open(place, weekday, minute, duration):
     return False
 
 
-def _json(text, default):
-    if not text:
+def _json(value, default):
+    """Accepts JSON text (SQLite, Postgres text) or an already-decoded value (Postgres jsonb)."""
+    if value is None or value == "":
         return default
+    if isinstance(value, (dict, list)):
+        return value
     try:
-        return json.loads(text)
+        return json.loads(value)
     except (ValueError, TypeError):
         return default
 
 
-def load_dataset(path):
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(f"Places dataset not found: {path}")
-    uri = "file:" + path.resolve().as_posix() + "?mode=ro"
-    con = sqlite3.connect(uri, uri=True)
-    try:
-        rows = con.execute(f"SELECT {COLUMNS} FROM places WHERE status='active'").fetchall()
-    finally:
-        con.close()
-
+def _build(rows):
+    """Rows in COLUMNS order -> Dataset. Shared by every source."""
     places = []
     chip_hub_counts = defaultdict(Counter)
     chip_counts = Counter()
     zsum = defaultdict(lambda: [0.0, 0.0, 0])
     for (pid, name, address, lat, lng, zone, hub, chips, pmin, pmax, hours, visit,
          io, website, phone, basis) in rows:
-        if lat is None or lng is None:
+        if lat is None or lng is None or not hub:
             continue
         chips_t = tuple(c for c in _json(chips, []) if isinstance(c, str))
         hours_raw = _json(hours, {})
+        if not isinstance(hours_raw, dict):
+            hours_raw = {}
+        basis_d = _json(basis, {})
         pmin = float(pmin or 0)
         pmax = float(pmax if pmax is not None else pmin)
         p = Place(
-            id=pid, name=name or "", address=address or "", lat=float(lat), lng=float(lng),
-            zone=zone or "", hub=hub or "", chips=chips_t,
+            id=str(pid), name=name or "", address=address or "", lat=float(lat), lng=float(lng),
+            zone=zone or "", hub=hub, chips=chips_t,
             tiles=frozenset(CHIP_TILE[c] for c in chips_t if c in CHIP_TILE),
             price_min=pmin, price_max=pmax, price=round((pmin + pmax) / 2, 2),
             hours=parse_hours(hours_raw), hours_raw=hours_raw, visit=int(visit or 60),
             indoor_outdoor=io or "", website=website or "", phone=phone or "",
-            basis=_json(basis, {}),
+            basis=basis_d if isinstance(basis_d, dict) else {},
         )
         places.append(p)
         for c in chips_t:
@@ -150,3 +148,41 @@ def load_dataset(path):
         chip_counts=dict(chip_counts),
         zone_centroids={z: (v[0] / v[2], v[1] / v[2]) for z, v in zsum.items() if v[2]},
     )
+
+
+def load_dataset(path):
+    """Load from a SQLite file, opened read-only."""
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Places dataset not found: {path}")
+    uri = "file:" + path.resolve().as_posix() + "?mode=ro"
+    con = sqlite3.connect(uri, uri=True)
+    try:
+        rows = con.execute(f"SELECT {COLUMNS} FROM places WHERE status='active'").fetchall()
+    finally:
+        con.close()
+    return _build(rows)
+
+
+_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*([.][A-Za-z_][A-Za-z0-9_]*)?$")
+
+
+def load_dataset_postgres(url, table="public.places", timeout=20):
+    """Load from Postgres (Supabase). The session is read-only, so nothing here can write.
+
+    The table needs the same column names as the SQLite `places` table. `chips`, `hours`
+    and `basis` may be text or jsonb. Needs the `psycopg` package.
+    """
+    if not _IDENT.match(table):
+        raise ValueError(f"Not a plain table name: {table!r}")
+    import psycopg  # imported here so the SQLite path has no extra dependency
+
+    # prepare_threshold=None keeps this working through Supabase's transaction pooler too
+    with psycopg.connect(url, connect_timeout=timeout, prepare_threshold=None) as con:
+        con.read_only = True
+        with con.cursor() as cur:
+            cur.execute(f"SELECT {COLUMNS} FROM {table} WHERE status = 'active'")
+            rows = cur.fetchall()
+    if not rows:
+        raise ValueError(f"{table} has no rows with status = 'active'")
+    return _build(rows)

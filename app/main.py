@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import logging
 import os
 import uuid
 from datetime import timedelta
@@ -13,7 +14,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 
 from engine import (DEFAULT_BUDGET_TIERS, DEFAULT_CONFIG, HUBS, TILES, WEIGHT_SPECS, ZONES, load_dataset,
-                    merged_config, plan)
+                    load_dataset_postgres, merged_config, plan)
 
 from .pods import EXAMPLE_PODS, random_pod
 from .store import Store, now_sgt
@@ -21,6 +22,9 @@ from .store import Store, now_sgt
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
 PLACES_DB = Path(os.environ.get("PEAPOD_PLACES_DB", ROOT / "data" / "places.sqlite"))
+PLACES_URL = os.environ.get("PEAPOD_PLACES_URL", "").strip()          # Postgres (Supabase) connection string
+PLACES_TABLE = os.environ.get("PEAPOD_PLACES_TABLE", "public.places")
+log = logging.getLogger("uvicorn.error")
 BENCH_DB = Path(os.environ.get("BENCH_DB", ROOT / "bench.sqlite"))
 PASSWORD = os.environ.get("BENCH_PASSWORD", "")
 NO_AUTH = os.environ.get("BENCH_NO_AUTH") == "1"
@@ -30,7 +34,27 @@ if not PASSWORD and not NO_AUTH:
     raise RuntimeError("Set BENCH_PASSWORD (the shared password), or BENCH_NO_AUTH=1 for local use only.")
 
 app = FastAPI(title="Peapod plan test bench", docs_url=None, redoc_url=None, openapi_url=None)
-ds = load_dataset(PLACES_DB)          # read-only, loaded once into memory
+
+
+def _load_places():
+    """Supabase when PEAPOD_PLACES_URL is set, else the bundled file. Read-only either way.
+
+    If Supabase cannot be read the bench still starts on the bundled file, and says so on
+    the page, so a database hiccup does not take the team's URL down.
+    """
+    if PLACES_URL:
+        try:
+            return load_dataset_postgres(PLACES_URL, PLACES_TABLE), f"Supabase {PLACES_TABLE}", ""
+        except Exception as exc:          # noqa: BLE001 - any failure falls back
+            text = str(exc).strip().splitlines()
+            problem = f"{type(exc).__name__}: {text[0][:200] if text else ''}"
+            log.warning("Could not load places from Supabase (%s). Using the bundled file.", problem)
+            return load_dataset(PLACES_DB), "bundled file (Supabase failed)", problem
+    return load_dataset(PLACES_DB), "bundled file", ""
+
+
+ds, DATA_SOURCE, DATA_PROBLEM = _load_places()   # loaded once into memory
+log.info("Places: %s from %s", len(ds.places), DATA_SOURCE)
 store = Store(BENCH_DB)
 
 
@@ -68,7 +92,7 @@ async def guard(request: Request, call_next):
 
 @app.get("/healthz")
 def healthz():
-    return {"ok": True, "places": len(ds.places)}
+    return {"ok": True, "places": len(ds.places), "source": DATA_SOURCE}
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -120,7 +144,8 @@ def meta():
         "budget_tiers": DEFAULT_BUDGET_TIERS, "seed": DEFAULT_CONFIG["seed"],
         "examples": EXAMPLE_PODS,
         "defaults": {"date": saturday.isoformat(), "start": "11:00", "today": today.isoformat()},
-        "dataset": {"places": len(ds.places), "chips": len(known),
+        "dataset": {"places": len(ds.places), "chips": len(known), "source": DATA_SOURCE,
+                    "problem": DATA_PROBLEM,
                     "no_chip": sum(1 for p in ds.places if not p.chips)},
         "reasons": ["wrong vibe", "closed", "too far", "too pricey", "repeat", "other"],
     }

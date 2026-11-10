@@ -461,7 +461,8 @@ document.addEventListener('change', e => {
     if (saved.cmp) Object.assign(S.cmp, saved.cmp);
     $('#tester').value = saved.tester || '';
   }
-  $('#dataset-note').textContent = `${M.dataset.places.toLocaleString()} active places · ${M.dataset.chips} chips · ${M.dataset.no_chip.toLocaleString()} with no chip (matched by kind only) · Singapore time`;
+  $('#dataset-note').title = M.dataset.problem || '';
+  $('#dataset-note').textContent = `${M.dataset.places.toLocaleString()} active places from ${M.dataset.source} · ${M.dataset.chips} chips · ${M.dataset.no_chip.toLocaleString()} with no chip (matched by kind only) · Singapore time`;
   renderPod(); renderRequest(); renderWeights(); renderResult(); renderDebug(); renderCompare(); renderRuns();
 })();
 })();
