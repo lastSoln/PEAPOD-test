@@ -22,8 +22,22 @@ def mode_minutes(km, mode_cfg):
 
 
 def leg_estimate(km, travel):
-    """Travel between two stops: walk when the walk is short, else public transport."""
-    walk = mode_minutes(km, travel["walk"])
-    if walk <= travel["walk_leg_max_min"]:
-        return "walk", int(ceil(walk))
+    """Travel between two stops: up to 1.2 km is a walk at about 13 min per km, further is
+    public transport (plan rule book v64, "Legs")."""
+    if km <= travel["walk_leg_max_km"]:
+        return "walk", int(ceil(km * travel["walk_min_per_km"]))
     return "transit", int(ceil(mode_minutes(km, travel["transit"])))
+
+
+MODES = ("walk", "transit", "car", "cab")
+
+
+def fastest_minutes(km, travel):
+    """Door to door by whichever of the four ways is quickest."""
+    return min(mode_minutes(km, travel[m]) for m in MODES)
+
+
+def km_within(minutes, travel):
+    """The furthest straight-line km reachable in `minutes` by the fastest way."""
+    return max(max(0.0, minutes - travel[m]["overhead_min"]) * travel[m]["speed_kmh"] / (60 * travel[m]["detour"])
+               for m in MODES)

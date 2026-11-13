@@ -38,64 +38,109 @@ Source: `peapod_scraper/data/peapod_places.sqlite`, table `places`, opened read-
 - **Three chips in the app design have no places** (Pottery & ceramics, Board-game cafés,
   Pool & beach-club days), so the pod builder does not offer them.
 
-## How the engine works
+## What the bench does
 
-`engine/planner.py` follows the Peapod Engine Manual: **Filter, Taste, Walk, Assemble**.
+Five tabs, built for a phone first (on a wide screen the pod sits beside the rest):
 
-**Filter (hard limits, never relaxed).** Active only; fixed Area means that zone only; bars and
-nightlife only if every member ticked over 18; open for the whole visit at the arrival time; and the
-plan's total estimated cost must fit the lowest budget tier among the members (a fixed Budget row can
-lower it). A hub with fewer than 3 eligible places is "empty"; if the Kind row needs it the engine
-fails and names the row. Diet, allergies, ratings and "needs" are ignored.
+- **Pod.** 3 to 10 fake peas. Each answers the app's four onboarding questions: interests (3 to 5
+  tiles, with optional favourites inside them), spend, how far they usually go, and plan style. Plus
+  over 18, home and needs.
+- **Plan.** Start a Moment or a Day out, choose who pitches it, then play the whole life of the plan:
+  swipe as each pea (I'm in, Maybe, Can't, or no answer, with reasons), close the round, see what
+  Peapod reworked, and after the rounds edit, heart, leave, rejoin and approve.
+- **Inspect.** The sanity checks, the map, what survived each filter, each pea's limits, and the top
+  candidates for every stop with the score broken into parts.
+- **Tune.** Every weight, the seed, the budget tiers, and a side-by-side compare of two weight sets.
+- **Log.** The plan's append-only log, the full list of rules, and every saved run with CSV exports.
 
-**Taste (ranks what survived).** Each candidate's score is the sum of these parts, all shown in the
-debug view:
+## The rules
 
-| Part | Formula | Weight |
-|---|---|---|
-| Majority | weight × share of counted members who match | `majority_share` |
-| Match sum | sum of per-member match ÷ counted members (exact chip 1, same tile 0.6) | `chip_exact`, `chip_same_tile` |
-| No chip | flat score for a place with no chip, instead of the two above | `no_chip_base` |
-| Fairness | bonus × share of still-unmatched members this stop would serve | `fairness_bonus` |
-| Variety | minus the penalty if the hub repeats the previous stop's hub | `variety_penalty` |
-| Distance | minus the penalty × km from the previous stop | `distance_penalty_per_km` |
-| Price | weight × closeness of the price to the per-stop target for the budget tier | `price_closeness` |
-| New slot | bonus, in the last stop only, for a hub or chip nobody picked | `new_slot_bonus` |
-| Jitter | seeded random tie-break | `seed_jitter` |
+All 71 rules are in `engine/rules.py` and on the Log tab, each marked **manual** (from the engine
+manual), **design** (from the app design) or **guess** (my choice where neither says). In short:
 
-A member with no pick in a candidate's hub is not counted, so they do not pull its share down.
-Interest tiles (which chips are "the same tile") are the 12 tiles from the alpha onboarding design,
-in `engine/taxonomy.py`.
+**Hard limits (filter, never loosened).** Active places only; a fixed Area; bars only if everyone is
+over 18; the plan's total cost within the lowest spend tier; every stop within each pea's travel
+answer from their home (Close by 15 min, Across town 45 min, Out of town no limit, by the fastest of
+walk, public transport, car or cab); nothing a pea said they had "Done lately"; open for the whole
+visit at the real arrival time. A kind with fewer than 3 eligible places is empty, and a Kind row that
+needs it fails by naming the row.
 
-**Walk.** Stops are chosen one at a time. Each slot first allows only hubs the pod still wants and has
-not had yet; if nothing fits, it loosens the hub mix (and says so in the debug view). Every candidate
-must be within the max travel time of the previous stop, open at its own real arrival time, and
-affordable with what is left of the budget. Travel between stops is walking if the walk is 15 minutes
-or less, otherwise public transport.
+**Taste (ranking).** A favourite is an exact match (1), another chip from a picked interest is a near
+match (0.6). Majority first: the share of counted peas who match, then the sum of their matches. A pea
+with no pick for that kind of stop is not counted. A fairness bonus pulls in a stop for anyone not yet
+matched. Places with no chip are matched by kind only, at a lower flat score.
 
-**Assemble.** Times, legs, cost per person, a why-line, and up to 4 alternatives per stop. If nothing
-fits, the message says so plainly and never says whose limit blocked it.
+**Plan style (soft).** Go with the flow favours short hops (and, as a majority, one stop fewer and
+longer visits). The Planner favours confirmed hours (as a majority, one stop more). The Explorer
+favours one-off places and chips nobody picked. The Foodie favours food and cafe stops and makes Food
+a kind the pod wants. Style never filters anything out.
 
-**Sanity checks** (`engine/checks.py`) are recomputed from the finished plan, not taken from the walk:
-every stop open at arrival, total cost within the lowest budget, no repeated place, no same hub back
-to back, every leg under the limit, at least one match per member where a matching place exists.
+**Walk.** Stops are chosen one at a time: a kind the pod still wants, not the same kind twice in a
+row, a penalty per km, a hard cap on each leg, and the last slot kept for something new.
 
-### Choices I made where the manual is silent
+**Swiping.** The pitcher is in. Everyone else answers each round. Maybe, or Can't with a practical
+reason (Too far, Too pricey, Wrong time, Busy that day), keeps them in the rounds and Peapod reworks
+the plan. Can't with a "not for me" reason puts them out. No answer counts as Can't with no reason;
+three in a row is out. Three rounds at most, and round 3 is I'm in or Can't only. Everyone left in,
+with at least 2, makes it a plan; fewer than 2 ends it.
 
-These are the first things to argue with:
+**Rework.** The smallest change that answers all the reasons together, inside everyone's hard limits.
+Too far tightens that pea's limit for this plan; Too pricey lowers this plan's budget; Wrong time moves
+the start 2 hours; Busy that day moves a Saturday to Sunday and anything else a week on. Only stops
+that break the tightened limits are replaced, same kind first. The pod sees what changed and a neutral
+why, never who asked.
 
-- **The "something new" slot is the last stop.** Any hub is allowed there. "New" means a hub nobody
-  wants, or a place none of whose chips anybody picked.
-- **A fixed Kind on a Day out** fixes the first stop's hub; the rest of the day is free.
-- **The first stop's distance** is measured from the middle of the members' homes.
-- **No need state.** The engine does not yet prefer food at mealtimes or bars in the evening; only
-  opening hours steer that.
-- **Budget reserve.** While walking, each remaining stop keeps a small reserve (up to $8) so an early
-  stop cannot spend the whole budget.
-- **Soft loosening is hub mix only.** Area and time are treated as fixed, as the brief asks.
-- **Fairness on a Moment** passes if the single stop matches at least one member.
-- **Leave-home speeds** are guesses in `engine/config.py`: walk 4.8 km/h, public transport 18 km/h
-  plus 10 min, car 30 km/h plus 5 min, cab 30 km/h plus 8 min, each with a detour factor.
+**Planning.** Anyone going can change, remove, add or reorder stops. "Change it to" offers 2 to 4
+options with a tag (Cheaper, Closer, Quicker, More chill, More active, Something different). Anyone
+out can rejoin; anyone going can leave. When everyone going approves, the plan is locked.
+
+**Learning.** "Not my thing anymore" halves that pea's match on the plan's chips. "Done it lately" and
+"Not with this group" rest the plan's places. A heart raises the match on that stop's chips. Practical
+reasons, silence and limits never move taste.
+
+### Where the manual and the design disagree
+
+- **Maybe versus Can't.** The manual gives Maybe the practical reasons and Can't the "not for me"
+  ones. The design's rule book (v64) puts both groups under Can't, and has Maybe "pick what to
+  change". The bench accepts both: a practical reason with Maybe or Can't keeps the pea in the rounds.
+- **Rounds.** The rule book says "no limit on rounds"; the alpha flow and the manual say three. The
+  bench uses three (`max_rounds`).
+- **Spend tiers.** The onboarding design shows under $20, $20 to $60 and $60 and up "a head"; the
+  brief says whole-day tiers starting at under 40, 40 to 100 and 100 and over. The bench uses the
+  brief's numbers with the design's names, and both cut-offs are editable on the Tune tab.
+
+### Not in the bench
+
+The 24-hour clock, nudges and notifications, the 2-days-before close of swiping, drag to reorder
+(the bench has up and down buttons), typing a place name to add your own stop, and the need state
+(preferring food at mealtimes). Trips, pay and booking are not part of alpha.
+
+## What gets logged
+
+Every step is appended to the `events` table in `bench.sqlite` and never edited. Each event has a
+time (Singapore), the plan, the round, the phase, who did it, a type and the full detail as JSON.
+
+| Event | What it records |
+|---|---|
+| `plan_requested` | The request, who pitched it, the whole pod snapshot, the weights, tiers and seed |
+| `plan_built` | Why it was built (first draft, rework, member edit), every stop with its score, the cost, the checks, how many places survived each filter, and the top 5 candidates per stop with score parts |
+| `vote` | The pea, the answer (in, maybe, cant) and the reason |
+| `no_answer` | The pea, how many rounds missed in a row, and whether that put them out |
+| `member_out` | The pea and how: cant, missed, or left |
+| `rework` | Every reason and who gave it, what was tightened, and each change (from, to, why) |
+| `round_started` | The round number and who it goes to |
+| `phase_changed` | Swiping to Planning, Planning to Approved, or Ended, and why |
+| `edit` | Who changed what in Planning (from, to, tag) and the checks afterwards |
+| `heart`, `approve`, `unapprove`, `leave`, `rejoin` | The pea and the stop or reason |
+| `taste_nudge` | The pea, the reason, and exactly which chips or places changed and by how much |
+
+Acceptance is an `in` vote (the pitcher counts as in from `plan_requested`) and then an `approve`.
+Rejection is a `cant` vote with its reason, a `no_answer`, or a `leave`; each produces a `member_out`,
+and a "not for me" reason also produces a `taste_nudge`. A practical reason produces a `rework`
+instead. Reasons are in the log but never in anything the pod is shown.
+
+Each plan the engine builds is also saved as a run (with the tester's Good, OK or Bad per stop and
+the 1 to 5 score), so the three CSV exports are: one row per stop, one row per run, and the log.
 
 ## Run it locally
 
@@ -190,40 +235,50 @@ fly deploy
 `/data`, and set `BENCH_PASSWORD`.
 
 The app loads all places into memory at start (about 3 seconds, roughly 300 MB), so give it 512 MB.
-A Day out takes 1 to 3 seconds to plan.
+A Day out takes 1 to 3 seconds to plan, and so does each rework or edit.
 
 ## Layout
 
 ```
 engine/      the plan engine: pure functions, no web imports
-  taxonomy.py  zones, hubs, interest tiles
+  taxonomy.py  zones, hubs, interest tiles, travel answers, plan styles, vote reasons
   config.py    default weights, budget tiers, travel speeds
-  dataset.py   read-only loader, opening-hours parsing
+  dataset.py   read-only loaders (SQLite file or Supabase), opening-hours parsing
   geo.py       distance and travel time
-  planner.py   filter, taste, walk, assemble
+  planner.py   filter, taste, plan style, walk, assemble
   checks.py    automatic sanity checks
-app/         FastAPI layer: password, API, bench.sqlite store, example pods
+  flow.py      swiping rounds, rework, planning edits, approval, taste learning
+  rules.py     every rule in plain words
+app/         FastAPI layer: password, API, bench.sqlite store (runs, sessions, log), example pods
 static/      the single page (plain JS)
 scripts/     build_dataset.py, dev.py
-tests/       engine tests against the bundled dataset
+tests/       engine and flow tests against the bundled dataset
 data/        places.sqlite (bundled, read-only)
 ```
 
 Using the engine on its own:
 
 ```python
-from engine import load_dataset, plan
+from engine import load_dataset, plan, flow
 ds = load_dataset("data/places.sqlite")
 result = plan(ds, pod, request, {"weights": {"fairness_bonus": 2}, "seed": 7})
+
+session, events = flow.start(ds, pod, request, config, pitcher="Mara")
+events = flow.submit_votes(ds, session, {"Jun": {"answer": "maybe", "reason": "too_far"}})
+events = flow.act(ds, session, {"type": "approve", "name": "Mara"})
 ```
 
 ## API
 
 | Route | What it does |
 |---|---|
-| `POST /api/plan` | `{pod, request, config, tester, label}`; plans, saves the run, returns it with `run_id` |
-| `POST /api/compare` | Same pod and request with `config_a` and `config_b`; saves both |
+| `POST /api/session` | `{pod, request, config, pitcher, tester, label}`; builds the first draft and starts swiping |
+| `POST /api/session/{id}/votes` | `{votes: {name: {answer, reason}}}`; closes the round, reworks if asked |
+| `POST /api/session/{id}/act` | `{type, name, ...}`: approve, unapprove, leave, rejoin, heart, change, remove, move, add |
+| `GET /api/session/{id}/options?stop=` | "Change it to" options for a stop, or quick picks for a new one |
+| `GET /api/session/{id}`, `GET /api/events` | A plan with its log; the log across plans |
+| `POST /api/compare` | Same pod and request with `config_a` and `config_b`; saves both first drafts |
 | `POST /api/runs/{id}/feedback` | `{plan_score, plan_note, stops: [{index, verdict, reason, note}]}` |
 | `GET /api/runs`, `GET /api/runs/{id}` | Saved runs and pass-rate totals; one run in full |
-| `GET /api/export.csv?level=stops\|runs` | CSV with inputs, weights, output and feedback together |
-| `GET /api/meta`, `GET /api/random-pod` | Chips, zones, hubs, weights, example pods; a random pod |
+| `GET /api/export.csv?level=stops\|runs\|events` | CSV exports |
+| `GET /api/meta`, `GET /api/rules`, `GET /api/random-pod` | Options and weights; the rules; a random pod |

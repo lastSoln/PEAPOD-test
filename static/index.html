@@ -2,57 +2,39 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#FBF6EA">
 <title>Peapod plan test bench</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Nunito:wght@400;600;700;800;900&family=DM+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <link rel="stylesheet" href="/static/styles.css">
 </head>
-<body>
+<body data-view="plan">
 <header class="top">
-  <div class="brand"><span class="pea" aria-hidden="true"></span><span>Peapod</span><em>plan test bench</em></div>
+  <div class="brand"><span class="pea" aria-hidden="true"></span><span>Peapod</span><em>test bench</em></div>
   <div class="top-meta" id="dataset-note"></div>
-  <label class="tester">Tester <input id="tester" placeholder="your name" autocomplete="off"></label>
   <a class="link" href="/logout">Sign out</a>
 </header>
 
-<main class="layout">
-  <section class="pane left" aria-label="Inputs">
-    <nav class="tabs" data-tabs="left">
-      <button data-tab="pod" class="on">Pod</button>
-      <button data-tab="request">Request</button>
-      <button data-tab="weights">Weights</button>
+<main class="app">
+  <section class="view" id="v-pod" aria-label="Pod"></section>
+  <div class="right">
+    <nav class="tabs" aria-label="Sections">
+      <button data-view="pod" class="only-mobile">Pod</button>
+      <button data-view="plan">Plan</button>
+      <button data-view="inspect">Inspect</button>
+      <button data-view="tune">Tune</button>
+      <button data-view="log">Log</button>
     </nav>
-    <div class="pane-body">
-      <div id="tab-pod"></div>
-      <div id="tab-request" hidden></div>
-      <div id="tab-weights" hidden></div>
-    </div>
-    <footer class="actions">
-      <div id="req-summary" class="req-summary"></div>
-      <div class="btn-row">
-        <button class="btn ghost" data-act="surprise" title="Leaves Area, Budget and Kind free and plans a Day out">Surprise us</button>
-        <button class="btn primary" data-act="plan">Plan it</button>
-      </div>
-    </footer>
-  </section>
-
-  <section class="pane right" aria-label="Output">
-    <nav class="tabs" data-tabs="right">
-      <button data-tab="result" class="on">Result</button>
-      <button data-tab="debug">Debug</button>
-      <button data-tab="compare">Compare</button>
-      <button data-tab="runs">Runs</button>
-    </nav>
-    <div class="pane-body">
-      <div id="tab-result"></div>
-      <div id="tab-debug" hidden></div>
-      <div id="tab-compare" hidden></div>
-      <div id="tab-runs" hidden></div>
-    </div>
-  </section>
+    <section class="view" id="v-plan" aria-label="Plan"></section>
+    <section class="view" id="v-inspect" aria-label="Inspect"></section>
+    <section class="view" id="v-tune" aria-label="Tune"></section>
+    <section class="view" id="v-log" aria-label="Log"></section>
+  </div>
 </main>
+
+<div id="sheet" class="sheet" hidden><div class="sheet-card" role="dialog" aria-modal="true"><div id="sheet-body"></div></div></div>
 <div id="toast" class="toast" hidden></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="/static/app.js"></script>

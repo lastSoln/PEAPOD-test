@@ -13,8 +13,9 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from engine import (DEFAULT_BUDGET_TIERS, DEFAULT_CONFIG, HUBS, TILES, WEIGHT_SPECS, ZONES, load_dataset,
-                    load_dataset_postgres, merged_config, plan)
+from engine import (DEFAULT_BUDGET_TIERS, DEFAULT_CONFIG, HUBS, NOT_FOR_ME_REASONS, PRACTICAL_REASONS, RULES, STYLES,
+                    TILES, TRAVEL_PREFS, WEIGHT_SPECS, ZONES, flow, load_dataset, load_dataset_postgres,
+                    merged_config, plan)
 
 from .pods import EXAMPLE_PODS, random_pod
 from .store import Store, now_sgt
@@ -124,67 +125,74 @@ def index():
     return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-store"})
 
 
-def _chip_list():
-    return sorted(ds.chip_counts.items(), key=lambda kv: -kv[1])
+def _tiles():
+    known = set(ds.chip_counts)
+    return [{"key": t["key"], "label": t["label"],
+             "chips": [{"name": c, "count": ds.chip_counts[c], "hub": ds.chip_hub[c]} for c in t["chips"] if c in known]}
+            for t in TILES]
 
 
 @app.get("/api/meta")
 def meta():
-    known = set(ds.chip_counts)
-    tiles = [{"key": t["key"], "label": t["label"],
-              "chips": [{"name": c, "count": ds.chip_counts[c], "hub": ds.chip_hub[c]} for c in t["chips"] if c in known]}
-             for t in TILES]
     today = now_sgt().date()
     saturday = today + timedelta(days=(5 - today.weekday()) % 7 or 7)
     return {
-        "zones": ZONES, "hubs": HUBS, "tiles": tiles,
+        "zones": ZONES, "hubs": HUBS, "tiles": _tiles(),
+        "travel_prefs": TRAVEL_PREFS, "styles": STYLES,
+        "practical_reasons": PRACTICAL_REASONS, "not_for_me_reasons": NOT_FOR_ME_REASONS,
         "zone_centroids": {z: [round(v[0], 5), round(v[1], 5)] for z, v in ds.zone_centroids.items()},
-        "weights": [{"key": k, "label": l, "default": d, "min": lo, "max": hi, "step": st, "help": h}
-                    for k, l, d, lo, hi, st, h in WEIGHT_SPECS],
+        "weights": [{"key": k, "label": l, "default": d, "min": lo, "max": hi, "step": st, "help": h, "group": g}
+                    for k, l, d, lo, hi, st, h, g in WEIGHT_SPECS],
         "budget_tiers": DEFAULT_BUDGET_TIERS, "seed": DEFAULT_CONFIG["seed"],
+        "max_rounds": DEFAULT_CONFIG["max_rounds"],
         "examples": EXAMPLE_PODS,
         "defaults": {"date": saturday.isoformat(), "start": "11:00", "today": today.isoformat()},
-        "dataset": {"places": len(ds.places), "chips": len(known), "source": DATA_SOURCE,
-                    "problem": DATA_PROBLEM,
-                    "no_chip": sum(1 for p in ds.places if not p.chips)},
+        "dataset": {"places": len(ds.places), "chips": len(ds.chip_counts), "source": DATA_SOURCE,
+                    "problem": DATA_PROBLEM, "no_chip": sum(1 for p in ds.places if not p.chips)},
         "reasons": ["wrong vibe", "closed", "too far", "too pricey", "repeat", "other"],
     }
+
+
+@app.get("/api/rules")
+def api_rules():
+    return {"rules": RULES}
 
 
 @app.get("/api/random-pod")
 def api_random_pod(seed: int | None = None):
     seed = seed if seed is not None else int(uuid.uuid4().int % 100000)
-    return random_pod(_chip_list(), ZONES, DEFAULT_BUDGET_TIERS, seed)
+    return random_pod(_tiles(), ZONES, DEFAULT_BUDGET_TIERS, seed)
 
 
 def _validate(pod, request):
     members = (pod or {}).get("members") or []
     if not 3 <= len(members) <= 10:
         raise HTTPException(422, "A pod needs 3 to 10 members.")
+    names = [(m.get("name") or "").strip() for m in members]
+    if len(set(names)) != len(names) or not all(names):
+        raise HTTPException(422, "Every member needs a different name.")
     for m in members:
-        n = len(m.get("chips") or [])
+        n = len(m.get("interests") or m.get("chips") or [])
         if not 3 <= n <= 5:
-            raise HTTPException(422, f"{m.get('name') or 'A member'} needs 3 to 5 interest chips (has {n}).")
+            raise HTTPException(422, f"{m.get('name')} needs 3 to 5 interests (has {n}).")
     if not (request or {}).get("date"):
         raise HTTPException(422, "Pick a date.")
 
 
-def _run(pod, request, config, tester, label, group=None):
+def _saved_config(config):
     cfg = merged_config(config)
+    return {"weights": cfg["weights"], "budget_tiers": cfg["budget_tiers"], "seed": cfg["seed"]}
+
+
+def _run(pod, request, config, tester, label, group=None):
+    saved_cfg = _saved_config(config)
     try:
-        result = plan(ds, pod, request, cfg)
+        result = plan(ds, pod, request, saved_cfg)
     except (ValueError, KeyError, TypeError) as exc:
         raise HTTPException(422, f"Could not read the request: {exc}")
-    saved_cfg = {"weights": cfg["weights"], "budget_tiers": cfg["budget_tiers"], "seed": cfg["seed"]}
     result["run_id"] = store.save_run(pod, request, saved_cfg, result, tester, label, group)
     result["config"] = saved_cfg
     return result
-
-
-@app.post("/api/plan")
-def api_plan(body: dict = Body(...)):
-    _validate(body.get("pod"), body.get("request"))
-    return _run(body["pod"], body["request"], body.get("config"), body.get("tester", ""), body.get("label", ""))
 
 
 @app.post("/api/compare")
@@ -196,6 +204,91 @@ def api_compare(body: dict = Body(...)):
     return {"group": group,
             "a": _run(body["pod"], body["request"], body.get("config_a"), tester, (label + " [A]").strip(), group),
             "b": _run(body["pod"], body["request"], body.get("config_b"), tester, (label + " [B]").strip(), group)}
+
+
+# ---- one plan, from request to approved -------------------------------------------------
+
+def _commit(session_id, state, events):
+    """Save the session, append its events to the log, and save a run for every plan built."""
+    meta_keys = ("id", "tester", "label", "created_at", "events")
+    tester, label = state.get("tester", ""), state.get("label", "")
+    if any(e["type"] == "plan_built" for e in events):
+        state["plan"]["run_id"] = store.save_run(
+            flow.going_pod(state), state["request"], state["config"], state["plan"], tester, label,
+            session_id=session_id, round_no=state.get("round"))
+        state["plan"]["config"] = state["config"]
+    store.append_events(session_id, events)
+    store.save_session(session_id, {k: v for k, v in state.items() if k not in meta_keys})
+    return _session_out(session_id)
+
+
+def _session_out(session_id):
+    state = store.get_session(session_id)
+    if not state or "phase" not in state:
+        raise HTTPException(404, "Plan not found.")
+    state["events"] = store.list_events(session_id)
+    return state
+
+
+@app.post("/api/session")
+def api_session_start(body: dict = Body(...)):
+    _validate(body.get("pod"), body.get("request"))
+    tester, label = body.get("tester", ""), body.get("label", "")
+    try:
+        state, events = flow.start(ds, body["pod"], body["request"], body.get("config"), body.get("pitcher") or None)
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(422, f"Could not read the request: {exc}")
+    session_id = store.create_session(tester, label)
+    state.update(tester=tester, label=label)
+    return _commit(session_id, state, events)
+
+
+@app.get("/api/session/{session_id}")
+def api_session(session_id: int):
+    return _session_out(session_id)
+
+
+@app.post("/api/session/{session_id}/votes")
+def api_votes(session_id: int, body: dict = Body(...)):
+    state = _session_out(session_id)
+    try:
+        events = flow.submit_votes(ds, state, body.get("votes") or {})
+    except flow.FlowError as exc:
+        raise HTTPException(409, str(exc))
+    return _commit(session_id, state, events)
+
+
+@app.post("/api/session/{session_id}/act")
+def api_act(session_id: int, body: dict = Body(...)):
+    state = _session_out(session_id)
+    try:
+        events = flow.act(ds, state, body)
+    except flow.FlowError as exc:
+        raise HTTPException(409, str(exc))
+    except (KeyError, IndexError, ValueError, TypeError) as exc:
+        raise HTTPException(422, f"Could not do that: {exc}")
+    return _commit(session_id, state, events)
+
+
+@app.get("/api/session/{session_id}/options")
+def api_options(session_id: int, stop: int | None = None):
+    state = _session_out(session_id)
+    if state["phase"] != "planning":
+        raise HTTPException(409, "Stops can only be changed once it's a plan (Planning).")
+    try:
+        return {"options": flow.options(ds, state, stop)}
+    except (IndexError, ValueError) as exc:
+        raise HTTPException(422, f"Could not find options: {exc}")
+
+
+@app.get("/api/sessions")
+def api_sessions():
+    return {"sessions": store.list_sessions()}
+
+
+@app.get("/api/events")
+def api_events(session_id: int | None = None, limit: int = 500):
+    return {"events": store.list_events(session_id, min(max(limit, 1), 5000))}
 
 
 @app.post("/api/runs/{run_id}/feedback")
@@ -225,9 +318,10 @@ def api_run(run_id: int):
 
 @app.get("/api/export.csv")
 def api_export(level: str = "stops"):
-    level = "runs" if level == "runs" else "stops"
+    level = level if level in ("runs", "events") else "stops"
     name = f"peapod-bench-{level}-{now_sgt():%Y%m%d-%H%M}.csv"
-    return Response("﻿" + store.export_csv(level), media_type="text/csv; charset=utf-8",
+    body = store.export_events_csv() if level == "events" else store.export_csv(level)
+    return Response("﻿" + body, media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 

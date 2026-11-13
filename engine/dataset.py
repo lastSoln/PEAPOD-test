@@ -43,6 +43,8 @@ class Place:
     website: str
     phone: str
     basis: dict
+    confirmed: bool = False   # hours come from a source, not an estimate
+    chain: bool = False       # the same name appears on more than one place
 
 
 @dataclass
@@ -133,6 +135,7 @@ def _build(rows):
             indoor_outdoor=io or "", website=website or "", phone=phone or "",
             basis=basis_d if isinstance(basis_d, dict) else {},
         )
+        p.confirmed = p.basis.get("hours") not in (None, "", "estimated", "unknown", "none")
         places.append(p)
         for c in chips_t:
             chip_hub_counts[c][p.hub] += 1
@@ -140,6 +143,9 @@ def _build(rows):
         z = zsum[p.zone]
         z[0] += p.lat; z[1] += p.lng; z[2] += 1
 
+    names = Counter(p.name.strip().lower() for p in places)
+    for p in places:
+        p.chain = names[p.name.strip().lower()] > 1
     places.sort(key=lambda p: p.id)   # stable order so a seed repeats exactly
     return Dataset(
         places=places,

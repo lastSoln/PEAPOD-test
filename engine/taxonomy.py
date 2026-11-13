@@ -1,9 +1,9 @@
-"""Peapod taxonomy: zones, hubs and interest tiles.
+"""Peapod taxonomy: zones, hubs, interest tiles and the onboarding answers.
 
-Tiles come from the alpha onboarding design (Q1 Interests). A tile groups
-chips; "same tile" is what the taste score means by a near match. Chips that
-are in the design but not in the dataset are kept here so the mapping stays
-complete, but the bench only offers chips that exist in the dataset.
+Everything here mirrors the alpha app design: Q1 interests (tiles and their
+favourites), Q2 spend, Q3 travel time, Q4 plan style, and the vote reasons on
+the plan page. Chips that are in the design but not in the dataset are kept so
+the mapping stays complete; the bench only offers chips that have places.
 """
 
 ZONES = ["Central", "North", "North-East", "East", "South", "West"]
@@ -20,6 +20,9 @@ HUBS = [
 ]
 
 ADULT_HUB = "Bars and nightlife"
+FOOD_HUBS = {"Food", "Cafes, sweets and soft drinks"}
+CHILL_HUBS = {"Cafes, sweets and soft drinks", "Wellness", "Culture and shows", "Make and browse"}
+ACTIVE_HUBS = {"Outdoors and active", "Play and attractions"}
 
 TILES = [
     {"key": "eat", "label": "Eat Out", "chips": [
@@ -50,3 +53,36 @@ TILES = [
 ]
 
 CHIP_TILE = {chip: tile["key"] for tile in TILES for chip in tile["chips"]}
+TILE_CHIPS = {tile["key"]: list(tile["chips"]) for tile in TILES}
+TILE_LABEL = {tile["key"]: tile["label"] for tile in TILES}
+
+# Q3 "How far do you usually go?" The minutes are tunable weights; "far" has no limit.
+TRAVEL_PREFS = [
+    {"key": "close", "label": "Close by", "sub": "About 15 minutes"},
+    {"key": "town", "label": "Across town", "sub": "30 to 45 minutes"},
+    {"key": "far", "label": "Out of town", "sub": "An hour or more"},
+]
+
+# Q4 "Who are you when you make plans?"
+STYLES = [
+    {"key": "flow", "label": "Go with the flow", "does": "Keeps it easy: fewer stops, more time at each."},
+    {"key": "planner", "label": "The Planner", "does": "The full day, minute by minute."},
+    {"key": "explorer", "label": "The Explorer", "does": "Somewhere new every time."},
+    {"key": "foodie", "label": "The Foodie", "does": "Every plan built around the best bites."},
+]
+
+# Vote reasons. Practical ones rework this plan only; "not for me" ones put the member out
+# and nudge their taste.
+PRACTICAL_REASONS = [
+    {"key": "too_far", "label": "Too far"},
+    {"key": "too_pricey", "label": "Too pricey"},
+    {"key": "wrong_time", "label": "Wrong time"},
+    {"key": "busy_that_day", "label": "Busy that day"},
+]
+NOT_FOR_ME_REASONS = [
+    {"key": "not_my_thing", "label": "Not my thing anymore"},
+    {"key": "not_with_group", "label": "Not with this group"},
+    {"key": "done_lately", "label": "Done it lately"},
+]
+PRACTICAL = {r["key"] for r in PRACTICAL_REASONS}
+NOT_FOR_ME = {r["key"] for r in NOT_FOR_ME_REASONS}
